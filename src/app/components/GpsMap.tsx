@@ -1,6 +1,12 @@
 "use client";
 
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, {
+  useEffect,
+  useMemo,
+  useState,
+  useCallback,
+  useRef,
+} from "react";
 import {
   MapContainer,
   TileLayer,
@@ -14,15 +20,8 @@ import {
 } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
-
 import DraggablePointer from "./DraggablePointer";
 import { GpsPoint, Marker as IMarker, PointMarker } from "@prisma/client";
-
-const formatDistance = (meters: number) => {
-  const km = Math.floor(meters / 1000);
-  const m = meters % 1000;
-  return `${km}k + ${m.toFixed(2)}m`;
-};
 
 interface MarkerWithIcon {
   id: number;
@@ -30,6 +29,12 @@ interface MarkerWithIcon {
   marker?: IMarker;
   icon?: L.Icon;
 }
+
+const formatDistance = (meters: number) => {
+  const km = Math.floor(meters / 1000);
+  const m = meters % 1000;
+  return `${km}k + ${m.toFixed(2)}m`;
+};
 
 /* ---------------------------------------
     Icono default Leaflet configurado 1 vez
@@ -41,9 +46,6 @@ L.Marker.prototype.options.icon = L.icon({
   iconAnchor: [12, 41],
 });
 
-/* ---------------------------------------
-    EFECTO SOLO PARA VOLAR AL PUNTO SELECCIONADO
----------------------------------------- */
 const SelectedPositionEffect = React.memo(function SelectedPositionEffect({
   selectedPosition,
 }: {
@@ -64,7 +66,7 @@ const SelectedPositionEffect = React.memo(function SelectedPositionEffect({
         animate: true,
       });
     }
-  }, [selectedPosition]); // ❗ NO incluir "map"
+  }, [selectedPosition]);
 
   return null;
 });
@@ -78,7 +80,7 @@ const LegendMarkers = React.memo(function LegendMarkers({
   legend: PointMarker[];
   visibleGroups: Record<number, boolean>;
   selectedPosition?: { lat: number; lon: number } | null;
-  openPreview: any;
+  openPreview: (item: any) => void;
 }) {
   const iconsById = useMemo(() => {
     const map = new Map<number, L.Icon | undefined>();
@@ -123,12 +125,12 @@ const MarkerWithAutoTooltip = React.memo(function MarkerWithAutoTooltip({
   item,
   icon,
   selectedPosition,
-  onEyeClick, // nueva prop
+  onEyeClick,
 }: {
   item: PointMarker & { marker: IMarker };
   icon?: L.Icon;
   selectedPosition?: { lat: number; lon: number } | null;
-  onEyeClick?: (item: any) => any; // función opcional que se dispara al click del ojo
+  onEyeClick?: (item: any) => any;
 }) {
   const markerRef = React.useRef<L.Marker>(null);
 
@@ -183,20 +185,21 @@ const MarkerWithAutoTooltip = React.memo(function MarkerWithAutoTooltip({
             <i
               className="pi pi-eye"
               style={{ fontSize: "18px", color: "#007bff" }}
-            ></i>
+            />
           </button>
         </div>
       </Popup>
     </Marker>
   );
 });
+
 const PointsLayer = React.memo(function PointsLayer({
   points,
   setCurrentTime,
 }: {
   points: (GpsPoint & {
     GpsPointComment?: { comment: string }[];
-    fileName?: string; // o el campo que tengas para archivo
+    fileName?: string;
   })[];
   setCurrentTime: (v: number) => void;
 }) {
@@ -210,10 +213,13 @@ const PointsLayer = React.memo(function PointsLayer({
         p.GpsPointComment?.map((c) => c.comment).join("; ") ?? "";
       const hasComment = commentText.trim().length > 0;
 
-      // Contenido tooltip: comentario + lat/lon + archivo si existe
       const tooltipContent = `
         <div style="font-size: 12px; max-width: 200px;">
-          ${hasComment ? `<div><strong>Comentario:</strong> ${commentText}</div>` : ""}
+          ${
+            hasComment
+              ? `<div><strong>Comentario:</strong> ${commentText}</div>`
+              : ""
+          }
           <div><strong>Lat:</strong> ${p.lat.toFixed(5)}</div>
           <div><strong>Lon:</strong> ${p.lon.toFixed(5)}</div>
           ${p.fileName ? `<div><strong>Archivo:</strong> ${p.fileName}</div>` : ""}
@@ -276,6 +282,7 @@ const PointsLayer = React.memo(function PointsLayer({
 
   return null;
 });
+
 const MarkerUpdater = React.memo(function MarkerUpdater({
   points,
   currentTime,
@@ -290,7 +297,6 @@ const MarkerUpdater = React.memo(function MarkerUpdater({
   setCurrentTime: (v: number) => void;
   startKm: number;
   setOpenNewCommentDialog: React.Dispatch<React.SetStateAction<boolean>>;
-
   setOpenPreview: (v: any) => void;
   setSelectComment: React.Dispatch<
     React.SetStateAction<(any & { replies: any[] }) | null>
@@ -298,7 +304,9 @@ const MarkerUpdater = React.memo(function MarkerUpdater({
 }) {
   const map = useMap();
 
-  // 📌 Encuentra el punto más cercano al tiempo actual
+  // Ref para guardar última posición y evitar updates innecesarios
+  const lastPosRef = useRef<[number, number] | null>(null);
+
   const position = useMemo(() => {
     if (!points.length) return null;
     return points.reduce((prev, curr) =>
@@ -308,15 +316,22 @@ const MarkerUpdater = React.memo(function MarkerUpdater({
     );
   }, [points, currentTime]);
 
-  // 📌 Mover mapa solo cuando cambia el punto actual
   useEffect(() => {
     if (!position) return;
-    map.setView([position.lat, position.lon], map.getZoom(), {
-      animate: true,
-    });
-  }, [position]);
 
-  // 📌 Icon del marcador (creado una sola vez)
+    const lastPos = lastPosRef.current;
+    if (
+      !lastPos ||
+      Math.abs(lastPos[0] - position.lat) > 0.0001 ||
+      Math.abs(lastPos[1] - position.lon) > 0.0001
+    ) {
+      map.setView([position.lat, position.lon], map.getZoom(), {
+        animate: true,
+      });
+      lastPosRef.current = [position.lat, position.lon];
+    }
+  }, [position, map]);
+
   const customIcon = useMemo(
     () =>
       L.divIcon({
@@ -341,20 +356,19 @@ const MarkerUpdater = React.memo(function MarkerUpdater({
         <Marker
           position={[position.lat, position.lon]}
           icon={customIcon}
-          bubblingMouseEvents={false} // evita que el mapa capture los clics
+          bubblingMouseEvents={false}
         >
           <Tooltip
             permanent
             direction="top"
             offset={[0, -25]}
-            interactive={true} // ← permite clics dentro del tooltip
+            interactive={true}
             className="tooltip-interactive"
           >
             <div className="font-semibold text-[12px]">
               Lat: {position.lat.toFixed(5)} <br />
               Lon: {position.lon.toFixed(5)} <br />
               Dist: {formatDistance(startKm + position.totalDistance)} <br />
-              <div className="mt-2 flex justify-center gap-2 pointer-events-auto"></div>
             </div>
           </Tooltip>
         </Marker>
@@ -362,6 +376,7 @@ const MarkerUpdater = React.memo(function MarkerUpdater({
     </>
   );
 });
+
 const AddMarkersOnClick = React.memo(function AddMarkersOnClick({
   addingMode,
   setAddingMode,
@@ -371,13 +386,14 @@ const AddMarkersOnClick = React.memo(function AddMarkersOnClick({
   addingMode: boolean;
   setAddingMode: (v: boolean) => void;
   setMarkers: React.Dispatch<React.SetStateAction<MarkerWithIcon[]>>;
-  openModal: any;
+  openModal: () => void;
 }) {
   useMapEvent("click", (e) => {
     if (!addingMode) return;
 
+    // Corregido URL icono a minúscula 'png'
     const icon = L.icon({
-      iconUrl: "https://cdn-icons-pNG.flaticon.com/512/684/684908.png",
+      iconUrl: "https://cdn-icons-png.flaticon.com/512/684/684908.png",
       iconSize: [38, 38],
       iconAnchor: [19, 38],
     });
@@ -388,19 +404,20 @@ const AddMarkersOnClick = React.memo(function AddMarkersOnClick({
       icon,
     };
 
-    openModal(true);
+    // Descomenta si quieres agregar marcadores a estado
     // setMarkers((prev) => [...prev, newMarker])
+
+    openModal();
     setAddingMode(false);
   });
 
   return null;
 });
-// Componente simple que solo llama onSelect sin validaciones extra
 
 function AddMarkerMode({
   onSelect,
   onCancel,
-  canAddMarker, // función que retorna boolean | Promise<boolean>
+  canAddMarker,
 }: {
   onSelect: (pos: [number, number]) => void;
   onCancel: () => void;
@@ -410,18 +427,14 @@ function AddMarkerMode({
   const [waiting, setWaiting] = useState(false);
 
   useMapEvents({
-    mousemove(e) {
+    mousemove(e: any) {
       setPosition([e.latlng.lat, e.latlng.lng]);
     },
-    click: async (e) => {
-      if (waiting) return; // evitar múltiples clicks mientras espera validación
-
+    click: async (e: any) => {
+      if (waiting) return;
       const pos: [number, number] = [e.latlng.lat, e.latlng.lng];
       setWaiting(true);
       onSelect(pos);
-    },
-    keydown(e) {
-      // if (e.originalEvent === "Escape") onCancel()
     },
   });
 
@@ -445,7 +458,9 @@ function AddMarkerMode({
   ) : null;
 }
 
-export default function GpsMap({
+export default React.memo(GpsMap);
+
+function GpsMap({
   points,
   currentTime,
   setCurrentTime,
@@ -489,7 +504,7 @@ export default function GpsMap({
     [setCurrentTime],
   );
 
-  const [markers, setMarkers] = useState<MarkerWithIcon[]>([]);
+  const [markers, setMarkers] = useState<any[]>([]);
   const [addingMode, setAddingMode] = useState(false);
   const [selectedPositionNew, setSelectedPositionNew] = useState<
     [number, number] | null
@@ -527,7 +542,6 @@ export default function GpsMap({
         {addingMode && (
           <AddMarkerMode
             canAddMarker={async (pos: [number, number]) => {
-              // Ejemplo: no permitir si latitud < 0
               await new Promise((r) => setTimeout(r, 300)); // simulo delay
               return pos[0] >= 0;
             }}

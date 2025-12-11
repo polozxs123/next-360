@@ -23,19 +23,21 @@ import {
 import dynamic from "next/dynamic";
 
 const GpsMap = dynamic(() => import("@/app/components/GpsMap"), {
-  ssr: false, // Importa solo en cliente, no en servidor
+  ssr: false, // Solo en cliente
 });
+
 export type FileResponse = Omit<File, "tags"> & {
   gpsPoints: GpsPoint[];
   project:
     | (Project & {
         PointMarker: (PointMarker & {
-          marker: any; // Si tienes un tipo más específico para marker, úsalo aquí
+          marker: any; // Ajusta el tipo si tienes uno más específico
         })[];
       })
-    | null; // Puede ser null si no hay proyecto asociado
+    | null;
   tags: Itag[];
 };
+
 export default function GalleryPreviewPage() {
   const params = useParams();
   const fileId = useMemo(
@@ -43,25 +45,32 @@ export default function GalleryPreviewPage() {
     [params.id],
   );
 
-  // Estados para file, tags y loading/error
+  // Estados de datos
   const [file, setFile] = useState<FileResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
-  const [tagsOptions, setTagsOptions] = useState([]);
+  const [tagsOptions, setTagsOptions] = useState<Itag[]>([]);
   const [isLoadingTags, setIsLoadingTags] = useState(false);
 
-  // Estados UI y lógica
+  // Estados UI y lógicos
   const [currentTime, setCurrentTime] = useState(0);
   const [startKm, setStartKm] = useState(0);
   const [search, setSearch] = useState("");
-  const [filteredSuggestions, setFilteredSuggestions] = useState([]);
-  const [selectedLegendPoint, setSelectedLegendPoint] = useState(null);
-  const [visibleGroups, setVisibleGroups] = useState({});
+  const [filteredSuggestions, setFilteredSuggestions] = useState<GpsPoint[]>(
+    [],
+  );
+  const [selectedLegendPoint, setSelectedLegendPoint] = useState<{
+    lat: number;
+    lon: number;
+  } | null>(null);
+  const [visibleGroups, setVisibleGroups] = useState<Record<number, boolean>>(
+    {},
+  );
   const [openPreviewDialog, setOpenPreviewDialog] = useState(false);
   const [openNewCommentDialog, setOpenNewCommentDialog] = useState(false);
-  const [selectComment, setSelectComment] = useState(null);
-  const [newPosition, setNewPosition] = useState(null);
+  const [selectComment, setSelectComment] = useState<any | null>(null);
+  const [newPosition, setNewPosition] = useState<[number, number] | null>(null);
 
   // Fetch file by id
   const fetchFile = useCallback(async () => {
@@ -97,31 +106,38 @@ export default function GalleryPreviewPage() {
     }
   }, []);
 
+  // Al montar, carga datos
   useEffect(() => {
     fetchFile();
     fetchTags();
   }, [fetchFile, fetchTags]);
 
-  // AutoComplete searchPoints
+  // Búsqueda optimizada usando useCallback
   const searchPoints = useCallback(
-    (e: any) => {
+    (e: { query: string }) => {
       if (!file?.gpsPoints) return;
       const query = e.query.trim().toLowerCase();
 
+      // Filtrar puntos que contengan la búsqueda en la distancia formateada
       const results = file.gpsPoints.filter((p) => {
         const dist = startKm + p.totalDistance;
-        return formatDistance(dist).includes(query);
+        return formatDistance(dist).toLowerCase().includes(query);
       });
 
-      setFilteredSuggestions(results.slice(0, 30) as any);
+      setFilteredSuggestions(results.slice(0, 30));
     },
     [file?.gpsPoints, startKm],
   );
 
-  const handleSelectLegendPoint = useCallback((pos: any) => {
-    setSelectedLegendPoint({ ...pos });
-  }, []);
+  // Manejo selección punto leyenda
+  const handleSelectLegendPoint = useCallback(
+    (pos: { lat: number; lon: number }) => {
+      setSelectedLegendPoint(pos);
+    },
+    [],
+  );
 
+  // Memorizar los puntos marcadores para no recalcular
   const pointsMarkers = useMemo(() => {
     return file?.project?.PointMarker ?? [];
   }, [file?.project?.PointMarker]);
@@ -129,11 +145,14 @@ export default function GalleryPreviewPage() {
   if (error) {
     return <div>Error cargando datos: {error.message}</div>;
   }
-  if (isLoading || isLoadingTags) return <FullPageLoading />;
+  if (isLoading || isLoadingTags) {
+    return <FullPageLoading />;
+  }
 
   return (
     <div className="w-full h-full flex p-2 flex-col">
       <div className="flex flex-1 overflow-hidden w-full">
+        {/* Izquierda */}
         <div className="flex flex-col w-1/2">
           <div className="w-full p-3 border-b bg-white flex items-center gap-4 shadow-sm rounded-t">
             <div className="flex flex-col justify-center ">
@@ -158,11 +177,11 @@ export default function GalleryPreviewPage() {
                 itemTemplate={(e) => (
                   <PointTemplate p={e as any} startKm={startKm} />
                 )}
-                onChange={(e) => setSearch(e.value)}
+                onChange={(e) => setSearch(e.value as any)}
                 onSelect={(e) => {
-                  const p = e.value;
-                  setSearch(formatDistance(startKm + (p as any).totalDistance));
-                  setCurrentTime((p as any).second);
+                  const p = e.value as GpsPoint;
+                  setSearch(formatDistance(startKm + p.totalDistance));
+                  setCurrentTime(p.second);
                 }}
                 className="!w-full"
                 placeholder="Buscar distancia..."
@@ -175,10 +194,7 @@ export default function GalleryPreviewPage() {
                 <Tag
                   key={tag.id}
                   value={tag.name}
-                  style={{
-                    backgroundColor: `#${tag.color}`,
-                    color: "white",
-                  }}
+                  style={{ backgroundColor: `#${tag.color}`, color: "white" }}
                   rounded
                 />
               ))}
@@ -194,10 +210,39 @@ export default function GalleryPreviewPage() {
           />
         </div>
 
+        {/* Derecha */}
+        <div className="w-1/2 bg-white border-l h-full flex flex-col overflow-auto">
+          <SidebarLegend
+            tags={tagsOptions}
+            pointsMarkers={pointsMarkers}
+            onSelectPosition={handleSelectLegendPoint}
+            visibleGroups={visibleGroups}
+            setVisibleGroups={setVisibleGroups}
+          />
+
+          <div className="shadow-lg p-4 rounded-xl w-full h-full flex-1 min-h-0">
+            <GpsMap
+              newPosition={newPosition}
+              setNewPosition={setNewPosition}
+              visibleGroups={visibleGroups}
+              legend={pointsMarkers}
+              startKm={startKm}
+              setCurrentTime={setCurrentTime}
+              points={file?.gpsPoints ?? []}
+              currentTime={currentTime}
+              selectedPosition={selectedLegendPoint}
+              setOpenPreview={setOpenPreviewDialog}
+              setSelectComment={setSelectComment}
+              setOpenNewCommentDialog={setOpenNewCommentDialog}
+            />
+          </div>
+        </div>
+
+        {/* Dialogos */}
         <CommentPreviewDialog
           visible={openPreviewDialog}
           pointMarker={selectComment}
-          tags={tagsOptions || []}
+          tags={tagsOptions}
           defaultTags={file?.tags || []}
           onHide={() => setOpenPreviewDialog(false)}
           onSubmitReply={async (comment, pdf, tags, parentId) => {
@@ -230,7 +275,7 @@ export default function GalleryPreviewPage() {
         />
 
         <NewCommentDialog
-          tags={tagsOptions || []}
+          tags={tagsOptions}
           defaultTags={file?.tags || []}
           visible={openNewCommentDialog}
           newPosition={newPosition}
@@ -265,33 +310,6 @@ export default function GalleryPreviewPage() {
             }
           }}
         />
-
-        <div className="w-1/2 bg-white border-l h-full flex flex-col overflow-auto">
-          <SidebarLegend
-            tags={tagsOptions || []}
-            pointsMarkers={pointsMarkers || []}
-            onSelectPosition={handleSelectLegendPoint}
-            visibleGroups={visibleGroups}
-            setVisibleGroups={setVisibleGroups}
-          />
-
-          <div className="shadow-lg p-4 rounded-xl w-full h-full flex-1 min-h-0">
-            <GpsMap
-              newPosition={newPosition}
-              setNewPosition={setNewPosition}
-              visibleGroups={visibleGroups}
-              legend={pointsMarkers}
-              startKm={startKm}
-              setCurrentTime={setCurrentTime}
-              points={file?.gpsPoints ?? []}
-              currentTime={currentTime}
-              selectedPosition={selectedLegendPoint}
-              setOpenPreview={setOpenPreviewDialog}
-              setSelectComment={setSelectComment}
-              setOpenNewCommentDialog={setOpenNewCommentDialog}
-            />
-          </div>
-        </div>
       </div>
     </div>
   );

@@ -23,20 +23,15 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // 2. Log de Secreto (Para verificar si el valor existe)
   const secretExists = !!process.env.NEXTAUTH_SECRET;
   console.log(`Middleware CHECK: NEXTAUTH_SECRET exists? ${secretExists}`);
 
   if (!secretExists) {
-    // Si el secreto no existe, logueamos el fallo y podríamos redirigir a un error
     console.error(
       "CRITICAL ERROR: NEXTAUTH_SECRET is MISSING in Edge Runtime!",
     );
-    // Opcionalmente, podrías redirigir a una página de error 500 para evitar el bucle de login
-    // return NextResponse.rewrite(new URL('/error', request.url));
   }
 
-  // 3. Verificación de token de sesión JWT
   const token = await getToken({
     req: request,
     secret: process.env.NEXTAUTH_SECRET,

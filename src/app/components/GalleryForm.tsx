@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useFormik } from "formik";
 import { z } from "zod";
 import { InputText } from "primereact/inputtext";
@@ -9,6 +9,7 @@ import { FloatLabel } from "primereact/floatlabel";
 import { Button } from "primereact/button";
 import { Dropdown } from "primereact/dropdown";
 import { MultiSelect } from "primereact/multiselect";
+import { Toast } from "primereact/toast";
 import { uploadFileDirectlyToS3 } from "../lib/uploadToS3";
 
 const videoSchema = z.object({
@@ -29,14 +30,16 @@ type VideoForm = z.infer<typeof videoSchema>;
 
 type Props = {
   initialData?: Partial<VideoForm>;
+  onCloseModal?: () => void; // función para cerrar modal
 };
 
 type Project = { id: number; name: string };
 type Tag = { id: number; name: string };
 
-export default function GalleryForm({ initialData }: Props) {
+export default function GalleryForm({ initialData, onCloseModal }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
+  const toast = useRef<Toast>(null);
 
   useEffect(() => {
     async function fetchProjects() {
@@ -68,6 +71,7 @@ export default function GalleryForm({ initialData }: Props) {
       id: initialData?.id,
     },
     onSubmit: async (values, { setErrors, setSubmitting }) => {
+      setSubmitting(true);
       try {
         let fileKey: string | undefined;
         if (values.file) {
@@ -112,9 +116,23 @@ export default function GalleryForm({ initialData }: Props) {
         }
 
         const result = await response.json();
-        console.log("Respuesta backend:", result);
+
+        toast.current?.show({
+          severity: "success",
+          summary: "Éxito",
+          detail: "Archivo subido correctamente",
+          life: 3000,
+        });
+
+        if (onCloseModal) onCloseModal();
       } catch (err: any) {
         console.error(err);
+        toast.current?.show({
+          severity: "error",
+          summary: "Error",
+          detail: err.message || "Error al subir o procesar archivo.",
+          life: 4000,
+        });
         setErrors({
           fileName: err.message || "Error al subir o procesar archivo.",
         });
@@ -126,12 +144,11 @@ export default function GalleryForm({ initialData }: Props) {
 
   return (
     <div className="flex justify-center w-full h-full ">
+      <Toast ref={toast} />
       <form
         onSubmit={formik.handleSubmit}
-        className="flex flex-col gap-6 bg-white p-8 rounded-2xl shadow-xl w-full"
+        className="flex flex-col gap-6 bg-white  rounded-2xl shadow-xl w-full"
       >
-        {/* resto del formulario igual */}
-        {/* Asegúrate que Dropdown y MultiSelect usen projectId y tags correctamente */}
         <FloatLabel>
           <InputText
             id="startPlace"
@@ -142,7 +159,6 @@ export default function GalleryForm({ initialData }: Props) {
           />
           <label htmlFor="startPlace">Kilometro de Inicio</label>
         </FloatLabel>
-        {/* Validación */}
         {formik.touched.startPlace && formik.errors.startPlace && (
           <small className="text-red-500">{formik.errors.startPlace}</small>
         )}
@@ -226,9 +242,17 @@ export default function GalleryForm({ initialData }: Props) {
         </div>
 
         <Button
-          label={formik.values.id ? "Actualizar" : "Guardar"}
+          label={
+            formik.isSubmitting
+              ? "Enviando..."
+              : formik.values.id
+                ? "Actualizar"
+                : "Guardar"
+          }
           type="submit"
           className="w-full"
+          disabled={formik.isSubmitting}
+          loading={formik.isSubmitting}
         />
       </form>
     </div>
