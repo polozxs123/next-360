@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useMemo, useState, useCallback, useEffect } from "react";
 import { useParams } from "next/navigation";
 import { AutoComplete } from "primereact/autocomplete";
 import { Tag } from "primereact/tag";
@@ -12,6 +12,10 @@ import { uploadFileDirectlyToS3 } from "@/app/lib/uploadToS3";
 import SidebarLegend from "@/app/components/SidebarLegend";
 import { FullPageLoading } from "@/app/components/FullPageLoading";
 import Video360Section from "@/app/components/Video360";
+import dynamic from "next/dynamic";
+import { useSession } from "next-auth/react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+
 import {
   File,
   GpsPoint,
@@ -20,10 +24,8 @@ import {
   Tag as Itag,
 } from "@prisma/client";
 
-import dynamic from "next/dynamic";
-
 const GpsMap = dynamic(() => import("@/app/components/GpsMap"), {
-  ssr: false, // Solo en cliente
+  ssr: false,
 });
 
 export type FileResponse = Omit<File, "tags"> & {
@@ -31,7 +33,7 @@ export type FileResponse = Omit<File, "tags"> & {
   project:
     | (Project & {
         PointMarker: (PointMarker & {
-          marker: any; // Ajusta el tipo si tienes uno más específico
+          marker: any;
         })[];
       })
     | null;
@@ -39,19 +41,13 @@ export type FileResponse = Omit<File, "tags"> & {
 };
 
 export default function GalleryPreviewPage() {
+  const { data: session, status } = useSession();
   const params = useParams();
   const fileId = useMemo(
     () => (params.id ? Number(params.id) : null),
     [params.id],
   );
-
-  // Estados de datos
-  const [file, setFile] = useState<FileResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
-
-  const [tagsOptions, setTagsOptions] = useState<Itag[]>([]);
-  const [isLoadingTags, setIsLoadingTags] = useState(false);
+  const queryClient = useQueryClient();
 
   // Estados UI y lógicos
   const [currentTime, setCurrentTime] = useState(0);
@@ -72,64 +68,49 @@ export default function GalleryPreviewPage() {
   const [selectComment, setSelectComment] = useState<any | null>(null);
   const [newPosition, setNewPosition] = useState<[number, number] | null>(null);
 
-  // Fetch file by id
-  const fetchFile = useCallback(async () => {
-    if (!fileId) return;
-    setIsLoading(true);
-    setError(null);
-
-    try {
+  // Query para archivo
+  const fileQuery = useQuery<FileResponse, Error>({
+    queryKey: ["file", fileId],
+    queryFn: async () => {
+      if (!fileId) throw new Error("ID de archivo inválido");
       const res = await fetch(`/api/file/${fileId}`);
-      if (!res.ok) throw new Error("Error al obtener el archivo");
-      const data = await res.json();
-      setFile(data);
-      if (data?.startPlace != null) setStartKm(Number(data.startPlace));
-    } catch (err) {
-      setError(err instanceof Error ? err : new Error(String(err)));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [fileId]);
+      if (!res.ok) throw new Error("Error al obtener archivo");
+      return res.json();
+    },
+    enabled: !!fileId,
+  });
 
-  // Fetch tags
-  const fetchTags = useCallback(async () => {
-    setIsLoadingTags(true);
-    try {
+  // Actualizar startKm cuando cambien los datos
+  useEffect(() => {
+    if (fileQuery.data?.startPlace != null) {
+      setStartKm(Number(fileQuery.data.startPlace));
+    }
+  }, [fileQuery.data]);
+
+  // Query para tags
+  const tagsQuery = useQuery<Itag[], Error>({
+    queryKey: ["tags"],
+    queryFn: async () => {
       const res = await fetch("/api/tag");
       if (!res.ok) throw new Error("Error al obtener tags");
-      const data = await res.json();
-      setTagsOptions(data);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setIsLoadingTags(false);
-    }
-  }, []);
+      return res.json();
+    },
+  });
 
-  // Al montar, carga datos
-  useEffect(() => {
-    fetchFile();
-    fetchTags();
-  }, [fetchFile, fetchTags]);
-
-  // Búsqueda optimizada usando useCallback
+  // Función de búsqueda optimizada
   const searchPoints = useCallback(
     (e: { query: string }) => {
-      if (!file?.gpsPoints) return;
+      if (!fileQuery.data?.gpsPoints) return;
       const query = e.query.trim().toLowerCase();
-
-      // Filtrar puntos que contengan la búsqueda en la distancia formateada
-      const results = file.gpsPoints.filter((p) => {
+      const results = fileQuery.data.gpsPoints.filter((p) => {
         const dist = startKm + p.totalDistance;
         return formatDistance(dist).toLowerCase().includes(query);
       });
-
       setFilteredSuggestions(results.slice(0, 30));
     },
-    [file?.gpsPoints, startKm],
+    [fileQuery.data?.gpsPoints, startKm],
   );
 
-  // Manejo selección punto leyenda
   const handleSelectLegendPoint = useCallback(
     (pos: { lat: number; lon: number }) => {
       setSelectedLegendPoint(pos);
@@ -137,17 +118,17 @@ export default function GalleryPreviewPage() {
     [],
   );
 
-  // Memorizar los puntos marcadores para no recalcular
   const pointsMarkers = useMemo(() => {
-    return file?.project?.PointMarker ?? [];
-  }, [file?.project?.PointMarker]);
+    return fileQuery.data?.project?.PointMarker ?? [];
+  }, [fileQuery.data?.project?.PointMarker]);
 
-  if (error) {
-    return <div>Error cargando datos: {error.message}</div>;
-  }
-  if (isLoading || isLoadingTags) {
+  if (fileQuery.error)
+    return <div>Error cargando archivo: {fileQuery.error.message}</div>;
+  if (tagsQuery.error)
+    return <div>Error cargando tags: {tagsQuery.error.message}</div>;
+  if (fileQuery.isLoading || tagsQuery.isLoading || status === "loading")
     return <FullPageLoading />;
-  }
+  if (!session) return <div>No estás autenticado</div>;
 
   return (
     <div className="w-full h-full flex p-2 flex-col">
@@ -157,13 +138,15 @@ export default function GalleryPreviewPage() {
           <div className="w-full p-3 border-b bg-white flex items-center gap-4 shadow-sm rounded-t">
             <div className="flex flex-col justify-center ">
               <h2 className="text-base font-bold text-gray-800 leading-tight">
-                {file?.fileName ?? "Cargando archivo..."}
+                {fileQuery.data?.fileName ?? "Cargando archivo..."}
               </h2>
 
-              {file?.startPlace && (
+              {fileQuery.data?.startPlace && (
                 <span className="text-xs text-gray-600 leading-tight">
                   Inicio:{" "}
-                  <span className="font-semibold">{file.startPlace}</span>
+                  <span className="font-semibold">
+                    {fileQuery.data.startPlace}
+                  </span>
                 </span>
               )}
             </div>
@@ -190,7 +173,7 @@ export default function GalleryPreviewPage() {
             </div>
 
             <div>
-              {file?.tags?.map((tag) => (
+              {fileQuery.data?.tags?.map((tag) => (
                 <Tag
                   key={tag.id}
                   value={tag.name}
@@ -202,10 +185,10 @@ export default function GalleryPreviewPage() {
           </div>
 
           <Video360Section
-            url={file?.fileName ?? ""}
+            url={fileQuery.data?.fileName ?? ""}
             currentTime={currentTime}
             setCurrentTime={setCurrentTime}
-            points={file?.gpsPoints ?? []}
+            points={fileQuery.data?.gpsPoints ?? []}
             startKm={startKm}
           />
         </div>
@@ -213,7 +196,7 @@ export default function GalleryPreviewPage() {
         {/* Derecha */}
         <div className="w-1/2 bg-white border-l h-full flex flex-col overflow-auto">
           <SidebarLegend
-            tags={tagsOptions}
+            tags={tagsQuery.data || []}
             pointsMarkers={pointsMarkers}
             onSelectPosition={handleSelectLegendPoint}
             visibleGroups={visibleGroups}
@@ -228,7 +211,7 @@ export default function GalleryPreviewPage() {
               legend={pointsMarkers}
               startKm={startKm}
               setCurrentTime={setCurrentTime}
-              points={file?.gpsPoints ?? []}
+              points={fileQuery.data?.gpsPoints ?? []}
               currentTime={currentTime}
               selectedPosition={selectedLegendPoint}
               setOpenPreview={setOpenPreviewDialog}
@@ -238,20 +221,22 @@ export default function GalleryPreviewPage() {
           </div>
         </div>
 
-        {/* Dialogos */}
+        {/* Diálogos */}
         <CommentPreviewDialog
           visible={openPreviewDialog}
           pointMarker={selectComment}
-          tags={tagsOptions}
-          defaultTags={file?.tags || []}
+          tags={tagsQuery.data || []}
+          defaultTags={fileQuery.data?.tags || []}
           onHide={() => setOpenPreviewDialog(false)}
           onSubmitReply={async (comment, pdf, tags, parentId) => {
             try {
               let urlFile = null;
-              const createdById = 1;
+              const createdById = Number(session?.user?.id);
+
               if (pdf) {
                 urlFile = await uploadFileDirectlyToS3(pdf, pdf.name);
               }
+
               const res = await fetch("/api/point-marker/reply", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -267,7 +252,7 @@ export default function GalleryPreviewPage() {
               if (!res.ok) throw new Error("Error creando respuesta");
 
               setOpenPreviewDialog(false);
-              fetchFile(); // recarga data
+              queryClient.invalidateQueries({ queryKey: ["file", fileId] });
             } catch (error) {
               console.error("Error en submit respuesta:", error);
             }
@@ -275,18 +260,20 @@ export default function GalleryPreviewPage() {
         />
 
         <NewCommentDialog
-          tags={tagsOptions}
-          defaultTags={file?.tags || []}
+          tags={tagsQuery.data || []}
+          defaultTags={fileQuery.data?.tags || []}
           visible={openNewCommentDialog}
           newPosition={newPosition}
           onHide={() => setOpenNewCommentDialog(false)}
           onSubmit={async ({ comment, tags, marker, file: pdf }) => {
             try {
               let urlFile = null;
-              const createdById = 1;
+              const createdById = Number(session?.user?.id);
+
               if (pdf) {
                 urlFile = await uploadFileDirectlyToS3(pdf, pdf.name);
               }
+
               const res = await fetch("/api/point-marker", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -294,17 +281,18 @@ export default function GalleryPreviewPage() {
                   comment,
                   createdById,
                   urlFile,
-                  projectId: file?.projectId,
+                  projectId: fileQuery.data?.projectId,
                   markerId: marker?.id,
                   lat: newPosition?.[0],
                   lon: newPosition?.[1],
                   tags,
                 }),
               });
+
               if (!res.ok) throw new Error("Error creando comentario");
 
               setOpenNewCommentDialog(false);
-              fetchFile(); // recarga data
+              queryClient.invalidateQueries({ queryKey: ["file", fileId] });
             } catch (error) {
               console.error("Error en submit comentario:", error);
             }
