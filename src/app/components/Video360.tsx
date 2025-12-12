@@ -39,12 +39,13 @@ const Video360Section = React.memo(function Video360({
     if (!videoUrl) return;
 
     const container = containerRef.current;
-    if (!container) return;
+    const video = videoRef.current;
+    if (!container || !video) return;
 
     const setupViewer = () => {
       viewerRef.current = new View360(container, {
         projection: new EquirectProjection({
-          src: videoUrl, // Pasa la URL, no el elemento <video>
+          src: video,
           video: { autoplay: false, muted: true, loop: true },
         }),
         plugins: [
@@ -67,13 +68,10 @@ const Video360Section = React.memo(function Video360({
       setReady(true);
     };
 
-    setupViewer();
+    video.addEventListener("loadedmetadata", setupViewer, { once: true });
 
     return () => {
-      if (viewerRef.current) {
-        viewerRef.current.destroy();
-        viewerRef.current = null;
-      }
+      video.removeEventListener("loadedmetadata", setupViewer);
     };
   }, [videoUrl]);
   useEffect(() => {
@@ -215,7 +213,9 @@ const Video360Section = React.memo(function Video360({
         <video
           ref={videoRef}
           src={videoUrl}
+          playsInline
           crossOrigin="anonymous"
+          controls
           style={{
             display: "none",
             width: "480px",

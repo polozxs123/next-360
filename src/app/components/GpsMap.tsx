@@ -255,11 +255,11 @@ const PointsLayer = React.memo(function PointsLayer({
         layer.addLayer(marker);
       } else {
         const circle = L.circleMarker([p.lat, p.lon], {
-          radius: 5,
+          radius: 1,
           color: "#ff4444",
           fillColor: "#ff4444",
-          fillOpacity: 0.8,
-          opacity: 0.8,
+          fillOpacity: 0.3,
+          opacity: 0.4,
         });
 
         circle.on("click", () => setCurrentTime(p.second));
@@ -336,13 +336,13 @@ const MarkerUpdater = React.memo(function MarkerUpdater({
     () =>
       L.divIcon({
         html: `
-          <svg width="20" height="30" viewBox="0 0 20 30">
-            <path d="M10 0C6 8 0 20 10 30C20 20 14 8 10 0Z"
-              fill="#22c55e" stroke="#15803d" stroke-width="2"/>
-          </svg>
-        `,
+        <svg width="20" height="30" viewBox="0 0 20 30">
+          <circle cx="10" cy="25" r="5" fill="#22c55e" stroke="#15803d" stroke-width="2"/>
+<line x1="10" y1="0" x2="10" y2="20" stroke="#22c55e" stroke-width="4" />
+        </svg>
+      `,
         iconSize: [20, 30],
-        iconAnchor: [10, 30],
+        iconAnchor: [10, 25], // Ajustar el ancla al centro del círculo
         className: "",
       }),
     [],

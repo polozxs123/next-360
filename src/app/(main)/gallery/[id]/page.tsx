@@ -25,6 +25,7 @@ import {
 } from "@prisma/client";
 import { Sidebar } from "primereact/sidebar";
 import { Button } from "primereact/button";
+import { Splitter, SplitterPanel } from "primereact/splitter";
 
 const GpsMap = dynamic(() => import("@/app/components/GpsMap"), {
   ssr: false,
@@ -137,114 +138,119 @@ export default function GalleryPreviewPage() {
   return (
     <div className="w-full h-full flex p-2 flex-col">
       <div className="flex flex-1 overflow-hidden w-full">
-        {/* Izquierda */}
-        <div className="flex flex-col w-1/2">
-          <div className="w-full p-3 border-b bg-white flex items-center gap-4 shadow-sm rounded-t">
-            <div className="flex flex-col justify-center ">
-              <h2 className="text-base font-bold text-gray-800 leading-tight">
-                {fileQuery.data?.fileName ?? "Cargando archivo..."}
-              </h2>
+        <Splitter style={{ height: "100%", width: "100%" }}>
+          <SplitterPanel className="w-full flex align-items-center justify-content-center">
+            <div className="flex flex-col w-full ">
+              <div className="w-full p-3 border-b bg-white flex items-center gap-4 shadow-sm rounded-t">
+                <div className="flex flex-col justify-center ">
+                  <h2 className="text-base font-bold text-gray-800 leading-tight">
+                    {fileQuery.data?.fileName ?? "Cargando archivo..."}
+                  </h2>
 
-              {fileQuery.data?.startPlace && (
-                <span className="text-xs text-gray-600 leading-tight">
-                  Inicio:{" "}
-                  <span className="font-semibold">
-                    {fileQuery.data.startPlace}
-                  </span>
-                </span>
-              )}
-            </div>
+                  {fileQuery.data?.startPlace && (
+                    <span className="text-xs text-gray-600 leading-tight">
+                      Inicio:{" "}
+                      <span className="font-semibold">
+                        {fileQuery.data.startPlace}
+                      </span>
+                    </span>
+                  )}
+                </div>
 
-            <div className="flex-2 w-full">
-              <AutoComplete
-                value={search}
-                suggestions={filteredSuggestions}
-                completeMethod={searchPoints}
-                field=""
-                itemTemplate={(e) => (
-                  <PointTemplate p={e as any} startKm={startKm} />
-                )}
-                onChange={(e) => setSearch(e.value as any)}
-                onSelect={(e) => {
-                  const p = e.value as GpsPoint;
-                  setSearch(formatDistance(startKm + p.totalDistance));
-                  setCurrentTime(p.second);
-                }}
-                className="!w-full"
-                placeholder="Buscar distancia..."
-                inputClassName="!w-full text-sm"
+                <div className="flex-2 w-full">
+                  <AutoComplete
+                    value={search}
+                    suggestions={filteredSuggestions}
+                    completeMethod={searchPoints}
+                    field=""
+                    itemTemplate={(e) => (
+                      <PointTemplate p={e as any} startKm={startKm} />
+                    )}
+                    onChange={(e) => setSearch(e.value as any)}
+                    onSelect={(e) => {
+                      const p = e.value as GpsPoint;
+                      setSearch(formatDistance(startKm + p.totalDistance));
+                      setCurrentTime(p.second);
+                    }}
+                    className="!w-full"
+                    placeholder="Buscar distancia..."
+                    inputClassName="!w-full text-sm"
+                  />
+                </div>
+
+                <div>
+                  {fileQuery.data?.tags?.map((tag) => (
+                    <Tag
+                      key={tag.id}
+                      value={tag.name}
+                      style={{
+                        backgroundColor: `#${tag.color}`,
+                        color: "white",
+                      }}
+                      rounded
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <Video360Section
+                url={fileQuery.data?.fileName ?? ""}
+                currentTime={currentTime}
+                setCurrentTime={setCurrentTime}
+                points={fileQuery.data?.gpsPoints ?? []}
+                startKm={startKm}
               />
             </div>
-
-            <div>
-              {fileQuery.data?.tags?.map((tag) => (
-                <Tag
-                  key={tag.id}
-                  value={tag.name}
-                  style={{ backgroundColor: `#${tag.color}`, color: "white" }}
-                  rounded
+          </SplitterPanel>
+          <SplitterPanel className="w-full flex align-items-center justify-content-center">
+            <div className="w-full relative bg-white border-l h-full flex flex-col overflow-auto">
+              <Sidebar
+                style={{ width: "30rem" }}
+                header={() => <>Leyenda</>}
+                visible={visible}
+                onHide={() => setVisible(false)}
+              >
+                <SidebarLegend
+                  tags={tagsQuery.data || []}
+                  pointsMarkers={pointsMarkers}
+                  onSelectPosition={handleSelectLegendPoint}
+                  visibleGroups={visibleGroups}
+                  setVisibleGroups={setVisibleGroups}
                 />
-              ))}
+              </Sidebar>
+              <Button
+                style={{
+                  zIndex: 1000,
+                  position: "absolute",
+                  top: 5,
+                  right: 5,
+                }}
+                size="small"
+                severity="info"
+                icon="pi  pi-align-justify"
+                onClick={() => setVisible(true)}
+              />
+
+              <div className="shadow-lg  rounded-xl w-full h-full flex-1 min-h-0">
+                <GpsMap
+                  newPosition={newPosition}
+                  setNewPosition={setNewPosition}
+                  visibleGroups={visibleGroups}
+                  legend={pointsMarkers}
+                  startKm={startKm}
+                  setCurrentTime={setCurrentTime}
+                  points={fileQuery.data?.gpsPoints ?? []}
+                  currentTime={currentTime}
+                  selectedPosition={selectedLegendPoint}
+                  setOpenPreview={setOpenPreviewDialog}
+                  setSelectComment={setSelectComment}
+                  setOpenNewCommentDialog={setOpenNewCommentDialog}
+                />
+              </div>
             </div>
-          </div>
+          </SplitterPanel>
+        </Splitter>
 
-          <Video360Section
-            url={fileQuery.data?.fileName ?? ""}
-            currentTime={currentTime}
-            setCurrentTime={setCurrentTime}
-            points={fileQuery.data?.gpsPoints ?? []}
-            startKm={startKm}
-          />
-        </div>
-
-        <div className="w-1/2 relative bg-white border-l h-full flex flex-col overflow-auto">
-          <Sidebar
-            modal={false}
-            style={{ width: "30rem" }}
-            header={() => <>Leyenda</>}
-            visible={visible}
-            onHide={() => setVisible(false)}
-          >
-            <SidebarLegend
-              tags={tagsQuery.data || []}
-              pointsMarkers={pointsMarkers}
-              onSelectPosition={handleSelectLegendPoint}
-              visibleGroups={visibleGroups}
-              setVisibleGroups={setVisibleGroups}
-            />
-          </Sidebar>
-          <Button
-            style={{
-              zIndex: 1000,
-              position: "absolute",
-              top: 5,
-              right: 5,
-            }}
-            size="small"
-            severity="info"
-            icon="pi  pi-align-justify"
-            onClick={() => setVisible(true)}
-          />
-
-          <div className="shadow-lg  rounded-xl w-full h-full flex-1 min-h-0">
-            <GpsMap
-              newPosition={newPosition}
-              setNewPosition={setNewPosition}
-              visibleGroups={visibleGroups}
-              legend={pointsMarkers}
-              startKm={startKm}
-              setCurrentTime={setCurrentTime}
-              points={fileQuery.data?.gpsPoints ?? []}
-              currentTime={currentTime}
-              selectedPosition={selectedLegendPoint}
-              setOpenPreview={setOpenPreviewDialog}
-              setSelectComment={setSelectComment}
-              setOpenNewCommentDialog={setOpenNewCommentDialog}
-            />
-          </div>
-        </div>
-
-        {/* Diálogos */}
         <CommentPreviewDialog
           visible={openPreviewDialog}
           pointMarker={selectComment}
