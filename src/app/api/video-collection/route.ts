@@ -71,6 +71,8 @@ export async function POST(req: Request) {
       },
     });
 
+    console.log(collection);
+
     return NextResponse.json(collection, { status: 201 });
   } catch (error) {
     console.error(error);

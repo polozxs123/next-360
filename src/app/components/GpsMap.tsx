@@ -166,6 +166,59 @@ L.Marker.prototype.options.icon = L.icon({
   iconAnchor: [12, 41],
 });
 
+// ---------------------------------------------------------------------------
+// 🔥 Spatial index helpers - computados una sola vez por proyecto
+// ---------------------------------------------------------------------------
+
+type ProjectLoc = { lat: number; lon: number; meter?: number | null };
+
+/** Devuelve una copia ordenada por latitud para búsqueda binaria. */
+function buildSortedIndex(locations: ProjectLoc[]): ProjectLoc[] {
+  return [...locations].sort((a, b) => a.lat - b.lat);
+}
+
+/**
+ * Encuentra el proyecto más cercano usando búsqueda binaria sobre lat
+ * + ventana de ±WINDOW vecinos. O(log n + WINDOW) en lugar de O(n).
+ */
+function findClosestInIndex(
+  sortedLocs: ProjectLoc[],
+  lat: number,
+  lon: number,
+): { location: ProjectLoc; distance: number } {
+  if (!sortedLocs.length)
+    return { location: { lat: 0, lon: 0 }, distance: Infinity };
+
+  const WINDOW = 60; // vecinos a revisar a cada lado del pivot
+
+  // Búsqueda binaria por lat
+  let lo = 0;
+  let hi = sortedLocs.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (sortedLocs[mid].lat < lat) lo = mid + 1;
+    else hi = mid;
+  }
+
+  const start = Math.max(0, lo - WINDOW);
+  const end = Math.min(sortedLocs.length - 1, lo + WINDOW);
+
+  let closest = sortedLocs[start];
+  let minDist = Infinity;
+
+  for (let i = start; i <= end; i++) {
+    const d = getDistanceMeters(lat, lon, sortedLocs[i].lat, sortedLocs[i].lon);
+    if (d < minDist) {
+      minDist = d;
+      closest = sortedLocs[i];
+    }
+  }
+
+  return { location: closest, distance: minDist };
+}
+
+// ---------------------------------------------------------------------------
+
 const StyleInjector = React.memo(function StyleInjector() {
   useEffect(() => {
     const styleElement = document.createElement("style");
@@ -178,7 +231,6 @@ const StyleInjector = React.memo(function StyleInjector() {
   return null;
 });
 
-// 🔥 Capa de ubicaciones del proyecto optimizada
 const ProjectLocationsLayer = React.memo(function ProjectLocationsLayer({
   locations,
 }: {
@@ -225,7 +277,6 @@ const ProjectLocationsLayer = React.memo(function ProjectLocationsLayer({
   return null;
 });
 
-// 🔥 Efecto de posición seleccionada optimizado
 const SelectedPositionEffect = React.memo(function SelectedPositionEffect({
   selectedPosition,
 }: {
@@ -237,7 +288,6 @@ const SelectedPositionEffect = React.memo(function SelectedPositionEffect({
   useEffect(() => {
     if (!selectedPosition) return;
 
-    // Solo mover si la posición cambió significativamente
     const lastPos = lastPositionRef.current;
     if (
       lastPos &&
@@ -267,7 +317,6 @@ const SelectedPositionEffect = React.memo(function SelectedPositionEffect({
   return null;
 });
 
-// 🔥 Tipo para puntos con información de archivo
 type GpsPointWithFile = GpsPoint & {
   fileId: number;
   fileIndex: number;
@@ -275,14 +324,13 @@ type GpsPointWithFile = GpsPoint & {
   GpsPointComment?: { comment: string }[];
 };
 
-// 🔥 Función para calcular distancia entre dos puntos GPS
 function getDistanceMeters(
   lat1: number,
   lon1: number,
   lat2: number,
   lon2: number,
 ) {
-  const R = 6371000; // radio Tierra en metros
+  const R = 6371000;
   const toRad = (deg: number) => (deg * Math.PI) / 180;
 
   const dLat = toRad(lat2 - lat1);
@@ -299,6 +347,13 @@ function getDistanceMeters(
 
   return R * c;
 }
+
+// ---------------------------------------------------------------------------
+// 🔥 Tipo para puntos GPS pre-enriquecidos con la referencia más cercana
+// ---------------------------------------------------------------------------
+type GpsPointEnriched = GpsPointWithFile & {
+  closest: { location: ProjectLoc; distance: number };
+};
 
 const LegendMarkers = React.memo(function LegendMarkers({
   legend,
@@ -365,36 +420,48 @@ const LegendMarkers = React.memo(function LegendMarkers({
     [legend, visibleGroups, hasVisibleTags],
   );
 
-  // 🔥 Función para encontrar el GPS point más cercano
+  // 🔥 Índice ordenado de GPS points para búsqueda binaria (on-click)
+  const sortedGpsPoints = useMemo(
+    () => [...allGpsPoints].sort((a, b) => a.lat - b.lat),
+    [allGpsPoints],
+  );
+
+  // 🔥 findClosestGpsPoint ahora usa búsqueda binaria
   const findClosestGpsPoint = useCallback(
     (markerLat: number, markerLon: number) => {
-      if (!allGpsPoints.length) return null;
+      if (!sortedGpsPoints.length) return null;
 
-      let closestPoint = allGpsPoints[0];
-      let minDistance = getDistanceMeters(
-        markerLat,
-        markerLon,
-        closestPoint.lat,
-        closestPoint.lon,
-      );
+      const WINDOW = 60;
+      let lo = 0;
+      let hi = sortedGpsPoints.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (sortedGpsPoints[mid].lat < markerLat) lo = mid + 1;
+        else hi = mid;
+      }
 
-      for (const point of allGpsPoints) {
-        const distance = getDistanceMeters(
+      const start = Math.max(0, lo - WINDOW);
+      const end = Math.min(sortedGpsPoints.length - 1, lo + WINDOW);
+
+      let closest = sortedGpsPoints[start];
+      let minDist = Infinity;
+
+      for (let i = start; i <= end; i++) {
+        const d = getDistanceMeters(
           markerLat,
           markerLon,
-          point.lat,
-          point.lon,
+          sortedGpsPoints[i].lat,
+          sortedGpsPoints[i].lon,
         );
-
-        if (distance < minDistance) {
-          minDistance = distance;
-          closestPoint = point;
+        if (d < minDist) {
+          minDist = d;
+          closest = sortedGpsPoints[i];
         }
       }
 
-      return closestPoint;
+      return closest;
     },
-    [allGpsPoints],
+    [sortedGpsPoints],
   );
 
   useEffect(() => {
@@ -480,27 +547,18 @@ const LegendMarkers = React.memo(function LegendMarkers({
         maxWidth: 300,
       });
 
-      // 🔥 AQUÍ ESTÁ EL CAMBIO PRINCIPAL
       marker.on("click", () => {
-        console.log("Marker clickeado:", item);
-
-        // Buscar el GPS point más cercano
         const closestGpsPoint = findClosestGpsPoint(
           item.lat || 0,
           item.lon || 0,
         );
 
         if (closestGpsPoint) {
-          console.log("GPS Point más cercano encontrado:", closestGpsPoint);
-
-          // Seleccionar el punto GPS más cercano
           onSelectPoint({
             second: closestGpsPoint.second,
             fileId: closestGpsPoint.fileId,
             fileIndex: closestGpsPoint.fileIndex,
           });
-        } else {
-          console.log("No se encontró ningún GPS point cercano");
         }
       });
 
@@ -555,12 +613,14 @@ const LegendMarkers = React.memo(function LegendMarkers({
   return null;
 });
 
-// 🔥 Capa de puntos GPS optimizada
+// ---------------------------------------------------------------------------
+// 🔥 PointsLayer - recibe puntos ya enriquecidos con su referencia más cercana
+// ---------------------------------------------------------------------------
 const PointsLayer = React.memo(function PointsLayer({
   points,
   onSelectPoint,
 }: {
-  points: GpsPointWithFile[];
+  points: GpsPointEnriched[];
   onSelectPoint: (p: {
     second: number;
     fileId: number;
@@ -574,7 +634,6 @@ const PointsLayer = React.memo(function PointsLayer({
   } | null>(null);
 
   useEffect(() => {
-    // Limpiar capas anteriores
     if (layersRef.current) {
       map.removeLayer(layersRef.current.cluster);
       map.removeLayer(layersRef.current.layer);
@@ -593,23 +652,49 @@ const PointsLayer = React.memo(function PointsLayer({
         p.GpsPointComment?.map((c) => c.comment).join("; ") ?? "";
       const hasComment = commentText.trim().length > 0;
 
+      // 🔥 closest ya viene pre-calculado — sin iteración aquí
+      const { location: closestLoc, distance: closestDist } = p.closest;
+
       const tooltipContent = `
-        <div style="font-size: 12px; max-width: 220px;">
-          ${
-            hasComment
-              ? `<div style="margin-bottom: 6px; padding: 6px; background: #fef3c7; border-left: 3px solid #f59e0b; border-radius: 4px;">
-                  <strong>💬 Comentario:</strong>
-                  <div>${commentText}</div>
-                </div>`
-              : ""
-          }
-          <div><strong>Lat:</strong> ${p.lat.toFixed(5)}</div>
-          <div><strong>Lon:</strong> ${p.lon.toFixed(5)}</div>
-          <div style="font-size: 11px; color: #6b7280;">
-            🎥 Archivo #${p.fileIndex + 1}
-          </div>
-        </div>
-      `;
+  <div style="font-size: 12px; max-width: 240px; line-height: 1.4;">
+
+    ${
+      hasComment
+        ? `<div style="margin-bottom: 6px; padding: 6px; background: #fef3c7; border-left: 3px solid #f59e0b; border-radius: 4px;">
+            <strong>💬 Comentario:</strong>
+            <div>${commentText}</div>
+          </div>`
+        : ""
+    }
+
+    <div><strong>Lat:</strong> ${p.lat.toFixed(5)}</div>
+    <div><strong>Lon:</strong> ${p.lon.toFixed(5)}</div>
+
+    <div style="font-size: 11px; color: #6b7280;">
+      🎥 Archivo #${p.fileIndex + 1}
+    </div>
+
+    <hr style="margin: 6px 0;" />
+
+    <div style="font-weight: 700; color: #2563eb;">
+      📍 Proyecto más cercano
+    </div>
+
+    <div>
+      <strong>Lat:</strong> ${closestLoc.lat.toFixed(5)}<br/>
+      <strong>Lon:</strong> ${closestLoc.lon.toFixed(5)}
+    </div>
+
+    <div style="font-weight: 700; color: #16a34a;">
+      📏 Distancia: ${closestDist.toFixed(2)} m
+    </div>
+
+    <div style="font-weight: 700; color: #111827;">
+      📌 Referencia: ${closestLoc.meter ?? "N/A"}
+    </div>
+
+  </div>
+`;
 
       const handleSelect = () => {
         onSelectPoint({
@@ -651,13 +736,18 @@ const PointsLayer = React.memo(function PointsLayer({
           weight: 1,
         });
 
-        circle.on("click", handleSelect);
+        circle.on("click", (e) => {
+          L.DomEvent.stopPropagation(e);
+          handleSelect();
+          setTimeout(() => circle.openTooltip(), 100);
+        });
 
         circle.bindTooltip(tooltipContent, {
           direction: "top",
           offset: [0, -6],
           opacity: 0.95,
           className: "custom-tooltip",
+          sticky: false,
         });
 
         layer.addLayer(circle);
@@ -685,6 +775,8 @@ const MarkerUpdater = React.memo(function MarkerUpdater({
   currentTime,
   onSelectPoint,
   startKm,
+  projectLocations,
+  sortedProjectLocations,
 }: {
   files: (File & { gpsPoints: GpsPoint[] })[];
   currentTime: {
@@ -698,23 +790,15 @@ const MarkerUpdater = React.memo(function MarkerUpdater({
     fileIndex: number;
   }) => void;
   startKm: number;
+  projectLocations: ProjectLoc[];
+  // 🔥 índice ya ordenado pasado desde el padre
+  sortedProjectLocations: ProjectLoc[];
 }) {
   const map = useMap();
   const lastPosRef = useRef<[number, number] | null>(null);
   const isUserInteractingRef = useRef(false);
 
-  const pointsWithFile = useMemo<GpsPointWithFile[]>(
-    () =>
-      files.flatMap((file, fileIndex) =>
-        file.gpsPoints.map((p) => ({
-          ...p,
-          fileId: file.id,
-          fileIndex,
-        })),
-      ),
-    [files],
-  );
-
+  // 🔥 pointsWithFile ya no se usa aquí - lo maneja GpsMap y baja como enriched
   const position = useMemo(() => {
     if (!files.length || !files[currentTime.fileIndex]) return null;
 
@@ -786,9 +870,32 @@ const MarkerUpdater = React.memo(function MarkerUpdater({
     [],
   );
 
+  // 🔥 Usa findClosestInIndex en lugar de O(n) lineal
+  const closestProject = useMemo(() => {
+    if (!position || !sortedProjectLocations.length) return null;
+    return findClosestInIndex(
+      sortedProjectLocations,
+      position.lat,
+      position.lon,
+    );
+  }, [position, sortedProjectLocations]);
+
+  // 🔥 enrichedPoints ahora viene de GpsMap como prop para evitar recomputar aquí
+  // PointsLayer se monta con los puntos ya enriquecidos
+  const enrichedPoints = useMemo<GpsPointEnriched[]>(() => {
+    return files.flatMap((file, fileIndex) =>
+      file.gpsPoints.map((p) => ({
+        ...p,
+        fileId: file.id,
+        fileIndex,
+        closest: findClosestInIndex(sortedProjectLocations, p.lat, p.lon),
+      })),
+    );
+  }, [files, sortedProjectLocations]);
+
   return (
     <>
-      <PointsLayer points={pointsWithFile} onSelectPoint={onSelectPoint} />
+      <PointsLayer points={enrichedPoints} onSelectPoint={onSelectPoint} />
 
       {position && (
         <Marker
@@ -808,6 +915,41 @@ const MarkerUpdater = React.memo(function MarkerUpdater({
               📍 Lat: {position.lat.toFixed(5)}
               <br />
               📍 Lon: {position.lon.toFixed(5)}
+              {closestProject && (
+                <>
+                  <hr style={{ margin: "6px 0" }} />
+
+                  <div
+                    style={{
+                      fontSize: "12px",
+                      fontWeight: 700,
+                      color: "#111827",
+                    }}
+                  >
+                    📌 Proyecto más cercano
+                  </div>
+
+                  <div style={{ fontSize: "12px" }}>
+                    📍 Lat: {closestProject.location.lat.toFixed(5)}
+                    <br />
+                    📍 Lon: {closestProject.location.lon.toFixed(5)}
+                  </div>
+
+                  <div
+                    style={{
+                      fontSize: "12px",
+                      color: "#16a34a",
+                      fontWeight: 700,
+                    }}
+                  >
+                    📏 Distancia: {closestProject.distance.toFixed(2)} m
+                  </div>
+
+                  <div style={{ fontSize: "12px", color: "#6b7280" }}>
+                    📌 Referencia: {closestProject.location.meter ?? "N/A"}
+                  </div>
+                </>
+              )}
             </div>
           </Tooltip>
         </Marker>
@@ -879,7 +1021,9 @@ const AddMarkersOnClick = React.memo(function AddMarkersOnClick({
   return null;
 });
 
-// 🔥 Componente principal optimizado
+// ---------------------------------------------------------------------------
+// 🔥 Componente principal
+// ---------------------------------------------------------------------------
 function GpsMap({
   files,
   currentTime,
@@ -915,7 +1059,6 @@ function GpsMap({
   visibleTags: Record<number, boolean>;
   projectLocations: ProjectLocation[];
 }) {
-  // 🔥 Polyline optimizada - una sola para todos los archivos
   const polyline = useMemo<[number, number][]>(
     () =>
       files
@@ -944,7 +1087,12 @@ function GpsMap({
   const [markers, setMarkers] = useState<MarkerWithIcon[]>([]);
   const [addingMode, setAddingMode] = useState(false);
 
-  // 🔥 Crear array con todos los GPS points
+  // 🔥 Índice ordenado de projectLocations — se computa UNA sola vez
+  const sortedProjectLocations = useMemo(
+    () => buildSortedIndex(projectLocations),
+    [projectLocations],
+  );
+
   const allGpsPoints = useMemo<GpsPointWithFile[]>(
     () =>
       files.flatMap((file, fileIndex) =>
@@ -957,34 +1105,26 @@ function GpsMap({
     [files],
   );
 
+  // 🔥 onSelectPosition usa el índice pre-ordenado
   const onSelectPosition = useCallback(
     (pos: [number, number]) => {
-      let closestDistance = Infinity;
-      let closestLocationMeter: number | null = null;
+      const { location, distance } = findClosestInIndex(
+        sortedProjectLocations,
+        pos[0],
+        pos[1],
+      );
 
-      for (const loc of projectLocations) {
-        const dist = getDistanceMeters(pos[0], pos[1], loc.lat, loc.lon);
-        if (dist < closestDistance) {
-          closestDistance = dist;
-          closestLocationMeter = loc.meter ?? null;
-        }
-      }
-
-      const referenceMeter =
-        closestLocationMeter !== null ? closestLocationMeter : 0;
-
-      console.log("Referencia meter desde project location:", referenceMeter);
+      const referenceMeter = location.meter ?? 0;
       setNewPosition([pos[0], pos[1], referenceMeter]);
       setAddingMode(false);
     },
-    [projectLocations, setNewPosition, setAddingMode],
+    [sortedProjectLocations, setNewPosition],
   );
 
   const onCancelAdding = useCallback(() => {
     setAddingMode(false);
   }, []);
 
-  // Cambiar cursor en modo añadir
   useEffect(() => {
     const mapContainer =
       document.querySelector<HTMLDivElement>(".leaflet-container");
@@ -1088,6 +1228,8 @@ function GpsMap({
           currentTime={currentTime}
           onSelectPoint={memoOnSelectPoint}
           startKm={startKm}
+          projectLocations={projectLocations}
+          sortedProjectLocations={sortedProjectLocations}
         />
 
         <AddMarkersOnClick
